@@ -34,6 +34,9 @@ env/
 .env
 .env.*
 !.env.example
+Untitled
+untitled
+*.key
 
 # Local databases / runtime data
 *.db
