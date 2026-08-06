@@ -34,6 +34,8 @@ _frontend_origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_frontend_origins,
+    # Local Next.js + any Vercel deploy / preview URL
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
