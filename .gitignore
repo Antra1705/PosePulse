@@ -1,1 +1,68 @@
+# OS / editor
 .DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+.venv-*/
+venv/
+env/
+
+# Secrets & local env
+.env
+.env.*
+!.env.example
+
+# Local databases / runtime data
+*.db
+*.sqlite
+*.sqlite3
+data.db
+
+# Local helper / scratch (not needed to run the app)
+recreate_venv.sh
+landing.html
+landing.css
+
+# Legacy Streamlit static font (unused by Next.js frontend)
+static/AdobeClean.otf
+
+# Logs / temp
+*.log
+tmp/
+temp/
+.cache/
+
+# Frontend (also covered by frontend/.gitignore)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.vercel/
+frontend/*.tsbuildinfo
+frontend/next-env.d.ts
+
+# Keep MediaPipe model — required at runtime for deploy
+# ml_models/pose_landmarker_full.task

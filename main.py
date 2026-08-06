@@ -1,156 +1,191 @@
-import streamlit as st
 import os
-from services.auth.login_wall import render_login_wall
-from services.state.session_defaults import initial_session_defaults
+import base64
+
+import cv2
+import numpy as np
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
 from services.config.workout_config import EXERCISE_OPTIONS
-from services.ui.style_loader import load_css, inject_local_font, inject_webrtc_styles
-from services.persistence.exercise_repository import init_db
-from streamlit_webrtc import webrtc_streamer, WebRtcMode
+from services.persistence.exercise_repository import (
+    init_db,
+    get_or_create_user,
+    get_users_exercise_summary,
+)
+from services.coaching.llm import LLMCoach
+from services.coaching.tts import TextToSpeech
+from services.coaching.voice_pipeline import VoicePipeline
 
-def main():
-    st.set_page_config(
-        page_icon="🏋🏻‍♀️",
-        page_title="PosePulse",
-        initial_sidebar_state="expanded",
-        layout="centered"
-    )
+load_dotenv()
 
-    load_css(os.path.join(os.getcwd(), "static", "style.css"))
-    inject_local_font(os.path.join(os.getcwd(), "static", "AdobeClean.otf"), "AdobeClean")
+app = FastAPI(title="PosePulse API")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def _build_voice_pipeline():
+    try:
+        from groq import Groq
+
+        groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
+        return VoicePipeline(LLMCoach(groq_client), TextToSpeech())
+    except Exception:
+        return None
+
+
+@app.on_event("startup")
+def startup():
     init_db()
+    app.state.voice_pipeline = _build_voice_pipeline()
 
-    if not render_login_wall():
+
+class LoginRequest(BaseModel):
+    username: str
+
+
+class CoachEventRequest(BaseModel):
+    event: str
+    exercise: str
+    metrics: dict = {}
+
+
+@app.get("/api/exercises")
+def list_exercises():
+    return {"exercises": EXERCISE_OPTIONS}
+
+
+@app.post("/api/login")
+def login(body: LoginRequest):
+    username = body.username.strip()
+
+    if not username:
+        raise HTTPException(status_code=400, detail="Name cannot be empty.")
+
+    user = get_or_create_user(username)
+    return {"user_id": user["id"], "username": user["username"]}
+
+
+@app.get("/api/users/{user_id}/history")
+def workout_history(user_id: int):
+    rows = get_users_exercise_summary(user_id)
+
+    return {
+        "history": [
+            {
+                "exercise": row["exercise_name"],
+                "date": row["date"],
+                "reps": row["reps"],
+                "sets": row["sets"],
+                "time": row["time"],
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/api/coach/event")
+def coach_event(body: CoachEventRequest):
+    pipeline = app.state.voice_pipeline
+
+    if pipeline is None:
+        return {"text": None, "audio": None}
+
+    result = pipeline.process_event(body.event, body.exercise, body.metrics)
+
+    if not result:
+        return {"text": None, "audio": None}
+
+    audio, text = result
+
+    return {
+        "text": text,
+        "audio": base64.b64encode(audio).decode() if audio else None,
+    }
+
+
+@app.websocket("/ws/workout")
+async def workout_stream(
+    websocket: WebSocket,
+    user_id: int,
+    exercise: str,
+    sets: int = 3,
+    reps: int = 10,
+):
+    """Receives JPEG frames, returns annotated frames + metrics + coach audio."""
+    from services.vision.pose_analyzer import PoseAnalyzer
+    from services.tracking.workout_session import WorkoutSession
+
+    await websocket.accept()
+
+    if exercise not in EXERCISE_OPTIONS:
+        await websocket.close(code=4000, reason="Unknown exercise")
         return
-    
-    initial_session_defaults()
 
-    workout_started = st.session_state.get("workout_started", False)
-    
-    with st.sidebar:
-        st.title("PosePulse AI Coach")
+    if sets < 1 or reps < 1:
+        await websocket.close(code=4000, reason="Sets and reps must be at least 1")
+        return
 
-        if st.session_state.username:
-            st.caption(f"Logged in as {st.session_state.username}")
+    analyzer = PoseAnalyzer(exercise)
+    session = WorkoutSession(user_id, exercise, sets, reps)
+    pipeline = app.state.voice_pipeline
 
-        st.divider()
+    try:
+        while True:
+            data = await websocket.receive_bytes()
 
-        st.subheader("Workout Plan")
+            frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
 
-        if not workout_started:
-            st.selectbox("Exercise", options=EXERCISE_OPTIONS, key="plan_exercise")
+            if frame is None:
+                continue
 
-            st.number_input("Sets", min_value=0, max_value=50, key="plan_sets", step=1)
+            annotated, metrics = analyzer.process_frame(frame)
 
-            st.number_input("Reps per Set", min_value=0,max_value=50,key="plan_reps")
+            coach = None
 
-            st.markdown("")
+            if metrics.get("pose_detected") and pipeline:
+                event = session.update(metrics.get("reps", 0))
+                payload = {**metrics, **session.progress()}
 
-            start_session_button = st.button("Start Workout", width="stretch", key="start_session_button", icon=":material/exercise:")
+                if event:
+                    result = pipeline.process_event(event, exercise, payload)
+                else:
+                    result = pipeline.process_event(
+                        "ongoing_form_check", exercise, payload
+                    )
 
-            if start_session_button:
-                st.session_state["workout_started"] = True
-                st.rerun()
-        else:
-            exercise = st.session_state.get("plan_exercise")
-            sets = st.session_state.get("plan_sets")
-            reps = st.session_state.get("plan_reps")
+                if result:
+                    audio, text = result
+                    coach = {
+                        "text": text,
+                        "audio": base64.b64encode(audio).decode() if audio else None,
+                    }
+            elif metrics.get("pose_detected"):
+                session.update(metrics.get("reps", 0))
 
-            st.info(f"**{exercise}** -- {sets} Sets / {reps} Reps")
+            ok, buffer = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
 
-            end_session_button = st.button("End Workout", key="end_session_button", width="stretch",icon=":material/exercise:")
-            if end_session_button:
-                st.session_state["workout_started"] = False
-                st.rerun()
-        
-        if workout_started:
-            st.divider()
+            await websocket.send_json({
+                "type": "frame",
+                "image": base64.b64encode(buffer).decode() if ok else None,
+                "metrics": metrics,
+                "progress": session.progress(),
+                "coach": coach,
+            })
+    except WebSocketDisconnect:
+        pass
+    finally:
+        analyzer.close()
 
-            exercise = st.session_state.get("plan_exercise")
-            total_reps = st.session_state.get("reps")
-            current_set_reps = st.session_state.get("current_set_reps")
-            reps_per_set = st.session_state.get("plan_reps")
-            sets_completed = st.session_state.get("sets_completed")
-            target_sets = st.session_state.get("plan_sets")
-
-            st.subheader("Progress")
-
-            st.metric("Total Reps", f"{total_reps}")
-            st.metric("Current Set Reps", f"{current_set_reps} / {reps_per_set}")
-            st.metric("Sets Completed", f"{sets_completed} / {target_sets}")
-
-            st.divider()
-
-            if exercise == "Squats":
-                st.subheader("Squat Metrics")
-                st.metric("Knee Angle", f"{st.session_state.knee_angle}°")
-                st.metric("Back Angle", f"{st.session_state.back_angle}°")
-                st.metric("Depth Status", st.session_state.depth_status)
-
-            
-            elif exercise == "Push-ups":
-                st.subheader("Push-up Metrics")
-                st.metric("Elbow Angle", f"{st.session_state.elbow_angle}°")
-                st.metric("Body Alignment",st.session_state.body_alignment)
-                st.metric("Hip Position", st.session_state.hip_status)
-
-            elif exercise == "Bicep Curls (Dumbbell)":
-                st.subheader("Curl Metrics")
-                st.metric("Elbow Angle", f"{st.session_state.elbow_angle}°")
-                st.metric("Shoulder Stability",st.session_state.shoulder_status)
-                st.metric("Swing Detection", st.session_state.swing_status)
-
-            elif exercise == "Shoulder Press":
-                st.subheader("Shoulder Press Metrics")
-                st.metric("Elbow Angle", f"{st.session_state.elbow_angle}°")
-                st.metric("Arm Extension",st.session_state.extension_status)
-                st.metric("Back Arch", st.session_state.back_arch_status)
-
-            elif exercise == "Lunges":
-                st.subheader("Lunges Metrics")
-                st.metric("Front Knee Angle", f"{st.session_state.front_knee_angle}°")
-                st.metric("Torso Angle", f"{st.session_state.torso_angle}°")
-                st.metric("Balance Status", st.session_state.balance_status)
-
-    st.title("PosePulse")
-    st.markdown("### Real-time pose detection with proactive AI voice coaching")
-
-    if not workout_started:
-        st.markdown(
-            """
-            <div style = "
-                border: 10px dashed #444;
-                border-radius: 0px;
-                padding: 48px 32px;
-                text-align: center;
-                color: #888;
-                margin-top: 32px;
-            ">
-                <h2 style = "color: #ccc; margin-bottom: 8px;"> Set your workout plan</h2>
-                <p style = "font-size: 1.05rem;">
-                    Choose your exercise, sets and reps in the sidebar, <br>
-                    then click <strong>Start Workout</strong> to activate the camera and AI coach.
-                </p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    
-    else:
-        context = webrtc_streamer(
-            key="exercise-analysis",
-            mode=WebRtcMode.SENDRECV,
-            video_processor_factory=None,
-            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-            media_stream_constraints={
-                "video": True,
-                "audio": False
-            },
-            async_processing=True
-        )
-    st.markdown("#### Workout History")
-
-    inject_webrtc_styles()
 
 if __name__ == "__main__":
-    main()
+    import uvicorn
+
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

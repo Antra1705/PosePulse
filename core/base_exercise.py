@@ -24,6 +24,7 @@ class BaseExercise(ABC):
 
     def get_point(self, landmarks, idx):
         p = landmarks[idx]
+        return (p.x, p.y)
 
 
     @abstractmethod
