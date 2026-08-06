@@ -1,7 +1,5 @@
 # PosePulse — Real-time AI GYM Coach
 
-Next.js frontend + FastAPI backend recreation of [ai-gym-coach](https://github.com/shradha-khapra/ai-gym-coach) — same landing look, same exercises and coaching flow, **without Streamlit**.
-
 ## Stack
 
 - **Frontend:** Next.js (App Router) — landing page + live coach UI
