@@ -84,7 +84,15 @@ function LoginWall({ onLogin }: { onLogin: (user: User) => void }) {
       const user = await login(username);
       onLogin(user);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      const message = err instanceof Error ? err.message : "Login failed";
+      // Browser surfaces network/CORS failures as this opaque string
+      if (message === "Failed to fetch") {
+        setError(
+          "Cannot reach API. Wake https://posepulse.onrender.com/api/exercises then retry.",
+        );
+      } else {
+        setError(message);
+      }
     } finally {
       setLoading(false);
     }

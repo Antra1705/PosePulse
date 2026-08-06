@@ -22,11 +22,13 @@ load_dotenv()
 
 app = FastAPI(title="PosePulse API")
 
+# Frontend fetch calls don't send cookies, so a wide-open CORS policy is fine
+# for this demo and avoids "Failed to fetch" from Vercel / localhost mismatches.
 _frontend_origins = [
     origin.strip()
     for origin in os.environ.get(
         "FRONTEND_ORIGINS",
-        "http://localhost:3000,http://127.0.0.1:3000",
+        "*",
     ).split(",")
     if origin.strip()
 ]
@@ -34,9 +36,8 @@ _frontend_origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_frontend_origins,
-    # Local Next.js + any Vercel deploy / preview URL
     allow_origin_regex=r"https://.*\.vercel\.app",
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
