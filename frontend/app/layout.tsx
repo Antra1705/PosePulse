@@ -9,7 +9,7 @@ const inter = Inter({
   display: "swap",
 });
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://posepulse.vercel.app";
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://pose-pulse-five.vercel.app";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),

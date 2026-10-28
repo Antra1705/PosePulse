@@ -3,8 +3,13 @@
 Computer vision that watches every rep through your webcam, counts it, and
 tells you out loud what to fix.
 
-- **Frontend:** Next.js 16 (App Router, React Compiler) — landing page + live coach UI
-- **Backend:** FastAPI + WebSockets
+**Live:** <https://pose-pulse-five.vercel.app> · **API:** <https://posepulse.onrender.com/api/health>
+
+> The API runs on Render's free tier and sleeps when idle. The landing page
+> wakes it on load; the first visit after a quiet spell can take 30–60 s.
+
+- **Frontend:** Next.js 16 (App Router, React Compiler) — landing page + live coach UI, deployed on Vercel
+- **Backend:** FastAPI + WebSockets, deployed on Render
 - **Vision:** MediaPipe Pose Landmarker (33 landmarks / frame)
 - **Coach voice:** Groq (Llama 3.3 70B) + gTTS
 - **Storage:** SQLite (`data.db`)
@@ -34,6 +39,19 @@ Three things keep it fast on cheap hosting:
 
 The frontend also pings `/api/health` as soon as the landing page loads, which
 wakes a sleeping free-tier instance before the user reaches the coach.
+
+## Pages
+
+| Route | What it is |
+| --- | --- |
+| `/` | Landing page: live preview, how it works, features, exercises, FAQ |
+| `/coach` | The app: sign in with a name, pick a plan, train with the camera on |
+
+## Design
+
+Dark, product-first UI: Inter, violet accent (`#8b5cf6` → `#60a5fa`), soft
+glass cards, pill buttons. All tokens live at the top of
+`frontend/app/globals.css`; components only use the variables.
 
 ## Setup
 
@@ -71,8 +89,10 @@ Open <http://localhost:3000>, then **Try it live** → `/coach`.
 frontend handles the wake-up, but for an always-warm demo either upgrade the
 plan or point an uptime monitor at `/api/health` every 10 minutes.
 
-**Frontend (Vercel):** import `frontend/`, set `NEXT_PUBLIC_API_URL` to the
-Render URL and `NEXT_PUBLIC_SITE_URL` to the Vercel URL.
+**Frontend (Vercel):** import `frontend/` as the root directory, set
+`NEXT_PUBLIC_API_URL=https://posepulse.onrender.com` and
+`NEXT_PUBLIC_SITE_URL=https://pose-pulse-five.vercel.app`. Every push to
+`main` redeploys both services.
 
 > The WebSocket protocol changed in this version (landmarks instead of
 > images). Deploy backend and frontend together.
